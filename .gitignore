@@ -1,0 +1,44 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Build artifacts
+*.bat
+*.exe
+*.dll
+
+# Evidence/output
+evidence/
+*.jpg
+*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# MediaPipe model cache
+.mp_cache/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
