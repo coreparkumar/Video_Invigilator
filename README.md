@@ -27,6 +27,9 @@ Built as a proof of concept for AI-assisted exam invigilation. The focus is the 
 | Out of frame | no person detected | 3.0 s |
 
 ---
+## Demo
+<img width="712" height="567" alt="image" src="https://github.com/user-attachments/assets/ebe254a0-9db8-4a59-804c-92f0378574bf" />
+
 
 ## Pipeline
 
