@@ -30,6 +30,9 @@ A proof of concept that shows a laptop webcam can be analyzed locally, in real t
 | `out_of_frame` | Out of frame / left seat | 3.0 s |
 
 ---
+## Demo
+<img width="712" height="567" alt="image" src="https://github.com/user-attachments/assets/ebe254a0-9db8-4a59-804c-92f0378574bf" />
+
 
 ## Quick Start
 
