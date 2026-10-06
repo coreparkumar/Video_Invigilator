@@ -1,123 +1,203 @@
-# Edge Invigilator: Real-Time Body-Gesture Detection on the Edge
+# Edge Invigilator POC: Real-Time Body-Gesture Detection on the Edge
 
-A real-time computer vision application that reads a camera stream, estimates human body pose with a perception model, converts the raw landmarks into application-level events (hand raised, looking away, leaving the seat), and logs evidence, all **locally on the device** with no cloud and no network.
+A proof of concept that shows a laptop webcam can be analyzed locally, in real time, to spot body gestures that may indicate exam misconduct, and log them for human review. No cloud, no network, no continuous recording.
 
-Built as a proof of concept for AI-assisted exam invigilation. The focus is the full pipeline around the model: camera input, efficient inference, post-processing, temporal logic, and reliable results, not just model training.
-
-**Stack:** Python, OpenCV, MediaPipe Pose, NumPy | CPU-only inference | Windows and Linux
+**Stack:** Python 3.9-3.12, OpenCV, MediaPipe 0.10.14 Pose, NumPy | CPU-only | Windows/Linux
 
 ---
 
 ## What it does
 
-- Captures live video from a webcam (auto-discovers the camera index).
-- Runs pose estimation per frame and derives scale-invariant geometric features from the landmarks.
-- Detects 7 gestures, plus an out-of-frame condition, with a **temporal filter** so a gesture must persist before it is flagged (reduces false positives).
-- Calibrates to the user's neutral posture and **adapts slowly** to natural drift, without learning away sustained violations.
-- Logs every flag to CSV with a snapshot; shows a live overlay with per-gesture hold timers.
+- Captures live video from a webcam (auto-discovers camera index 0-3)
+- Runs MediaPipe Pose estimation per frame
+- Derives scale-invariant geometric features from landmarks (normalized by shoulder width)
+- Detects 7 gestures + out-of-frame with temporal filtering (gesture must persist before flagging)
+- Calibrates to user's neutral posture (`c` key) and adapts slowly to natural drift without learning away violations
+- Logs every flag to `evidence/events.csv` with one snapshot JPEG per flag
+- Shows live overlay: skeleton, per-gesture hold timers, FPS, calibration status, flag banners
 
-| Gesture | Rule (relative to shoulder width / calibrated baseline) | Flag after |
-|---|---|---|
-| Hand raised | wrist above nose | 1.0 s |
-| Hand at ear | wrist near an ear | 1.5 s |
-| Hand covering face | wrist near nose/mouth | 2.0 s |
-| Looking left / right | nose offset vs. ear midpoint | 2.5 s |
-| Looking down | nose-to-shoulder gap shrinks | 4.0 s |
-| Leaning sideways | shoulder-line tilt change > 14 deg | 2.5 s |
-| Out of frame | no person detected | 3.0 s |
+### Gestures
 
----
-
-## Pipeline
-
-```
-Camera (OpenCV) -> mirror flip -> Pose model (MediaPipe) -> landmarks
-   -> feature extraction (normalized by shoulder width)
-   -> per-frame classifier (thresholds vs. calibrated baseline)
-   -> temporal session (hold timers, cooldown, absence)
-   -> evidence log (CSV + one snapshot per flag) + live overlay
-```
-
-## Engineering highlights
-
-- **Application layer around a model:** camera handling, pre/post-processing, model-output interpretation, and event logic, the part that turns a perception model into a reliable result.
-- **Scale-invariant geometry:** all distances are normalized by shoulder width, so thresholds hold as the user moves closer to or farther from the camera.
-- **Temporal filtering and cooldowns:** hold-time thresholds and a repeat-flag cooldown trade a little latency for far fewer false alarms.
-- **Adaptive baseline with a safety gate:** the neutral posture follows slow drift (time constant about 20 s) but only while the user is well inside every limit, so a slow creep cannot be absorbed as "normal".
-- **Separation of concerns:** config block, pure inference functions (no I/O, time is injected), a state class (`InvigilatorSession`), rendering, and camera code are kept separate, which makes the logic unit-testable with synthetic landmarks and a fake clock.
-- **Robust camera startup:** requested index first, then automatic scan of indices 0-3, verifying a real frame can be read.
-- **Privacy by design:** processing is in memory; no continuous recording; the only artifacts written are a CSV row and one snapshot per flag; no network calls.
-- **Cross-platform:** the detection logic was tested on Linux (Ubuntu, Python 3.12); Windows helper scripts are included.
+| Gesture | Label | Flag after |
+|---------|-------|------------|
+| `hand_raised` | Hand raised | 1.0 s |
+| `hand_to_ear` | Hand at ear (phone/earpiece?) | 1.5 s |
+| `hand_to_face` | Hand covering face/mouth | 2.0 s |
+| `look_left` | Looking left | 2.5 s |
+| `look_right` | Looking right | 2.5 s |
+| `look_down` | Looking down | 4.0 s |
+| `leaning` | Leaning sideways | 2.5 s |
+| `out_of_frame` | Out of frame / left seat | 3.0 s |
 
 ---
 
-## Setup (Python 3.9-3.12)
+## Quick Start
 
-```
+```bash
+# 1. Create venv and install
 python -m venv .venv
-.venv\Scripts\activate        # Windows   |  source .venv/bin/activate (macOS/Linux)
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate      # macOS/Linux
 pip install -r requirements.txt
-python gesture_poc.py          # --camera N sets the preferred index; indices 0-3 are auto-scanned
+
+# 2. Run
+python -m invigilator            # or: .venv\Scripts\python.exe -m invigilator
+
+# Optional args:
+python -m invigilator --camera 1    # preferred camera index
+python -m invigilator --video file.mp4  # replay from video file
+python -m invigilator --out my_evidence  # custom output folder
+python -m invigilator --no-snapshots     # disable snapshot saving
 ```
 
-On Windows you can instead run `build.bat`, then `run_legacy.bat`. See `BAT_GUIDE.md`.
+### Keys
+- `c` — Calibrate neutral posture (sit normally, face screen, press)
+- `s` — Toggle skeleton overlay
+- `q` — Quit
 
-Versions are pinned on purpose: newer MediaPipe releases dropped the `mp.solutions` API used here (and the newer Tasks API needs a separate model download, which would break the offline design).
+---
 
-## Usage
+## Project Structure
 
-1. Sit normally, face the screen, press **c** to calibrate your neutral posture.
-2. Try the gestures. Each shows a hold timer; it turns red and is **flagged** once it persists past its threshold.
-3. Flags are logged to `evidence/events.csv` with a snapshot JPEG.
+```
+edge_invigilator/
+├── invigilator/
+│   ├── __init__.py
+│   ├── __main__.py          # entry point
+│   ├── app.py               # main loop wiring
+│   ├── config.py            # all thresholds & constants
+│   ├── features.py          # landmarks -> scale-invariant measurements
+│   ├── classifier.py        # measurements -> active gestures (per frame)
+│   ├── session.py           # hold timers, cooldowns, flags
+│   ├── baseline.py          # calibration + adaptive baseline
+│   ├── evidence.py          # CSV + snapshot logging
+│   ├── camera.py            # camera discovery + FrameSource protocol
+│   ├── pose.py              # MediaPipe wrapper
+│   └── overlay.py           # OpenCV drawing
+├── tests/
+│   ├── conftest.py          # synthetic landmarks, FakeClock
+│   ├── test_characterization.py  # legacy behavior capture
+│   ├── test_config.py
+│   ├── test_features.py
+│   ├── test_classifier.py
+│   ├── test_session.py
+│   ├── test_baseline.py
+│   ├── test_evidence.py
+│   ├── test_camera.py
+│   ├── test_pose.py
+│   ├── test_overlay.py
+│   └── test_app.py
+├── tools/
+│   ├── eval_gestures.py     # guided 10-attempt accuracy test
+│   └── soak_test.py         # false-positive soak test
+├── docs/
+│   └── EVAL.md              # evaluation results (generated)
+├── legacy/
+│   └── gesture_poc.py       # frozen baseline (v0.2)
+├── requirements.txt
+└── README.md
+```
 
-Keys: `c` calibrate, `s` skeleton on/off, `q` quit.
+**Dependency direction:** `config` → `features` → `classifier` → `session` → `app`; `evidence`, `camera`, `pose`, `overlay` are leaves used only by `app`.
+
+---
 
 ## Configuration
 
-Hold times live in `GESTURES` and geometric limits in `THRESHOLDS` at the top of `gesture_poc.py`. Adaptive-baseline behavior is controlled by `BASELINE_TAU_S` and `BASELINE_GATE`.
+All tunable values in `invigilator/config.py`:
+
+- `GESTURES` — label + hold_seconds per gesture
+- `THRESHOLDS` — geometric limits (normalized by shoulder width)
+- `DEFAULT_BASELINE` — yaw/neck/tilt before calibration
+- `COOLDOWN_S` — 5.0 s minimum between repeat flags
+- `VIS_MIN` — 0.5 landmark visibility threshold
+- `ABSENT_GRACE_S` — 0.5 s before out-of-frame starts counting
+- `BASELINE_TAU_S` — 20.0 s adaptation time constant
+- `BASELINE_GATE` — 0.5 (only adapt while within 50% of every threshold)
+
+Run validation: `python -m invigilator.config`
 
 ---
-
-## Results
-
-> Fill these in after running the evaluation on your machine. Do not publish numbers you have not measured.
-
-| Metric | Result | Hardware |
-|---|---|---|
-| Average FPS (end to end) | _TBD_ | _e.g. laptop CPU model_ |
-| Inference latency per frame | _TBD_ | |
-| Gesture detection (hits out of 10 attempts, per gesture) | _TBD_ | |
-| False flags in 2 min of normal sitting/typing | _TBD_ | |
 
 ## Testing
 
-- Gesture rules and temporal logic were verified with synthetic landmark inputs (neutral pose, each gesture, near-miss cases, sustained look-away, absence, and baseline drift).
-- A step-by-step, test-per-module refactor plan is in `Edge_Invigilator_Vibe_Coding_Plan.md`, with Windows scripts (`steps.bat`, `status.bat`) to run each stage's checks.
+```bash
+# All tests
+.venv\Scripts\python.exe -m pytest tests/ -q
+
+# Per-module (using helper scripts)
+steps.bat    # pick module 0-12
+status.bat   # automated pass/fail table
+test_all.bat # full suite
+```
+
+### Test Coverage (125 tests)
+- **Characterization (12):** Legacy behavior frozen — neutral, each gesture, near-miss, scale invariance
+- **Config (10):** Values match legacy; validation rejects bad configs
+- **Features (10):** Scale invariance, tilt abs(dx), zero shoulder width, near_neutral gate
+- **Classifier (21):** Each gesture + just-under/just-over thresholds, calibrated baseline shifts, priority rules
+- **Session (16):** Flag at hold time, flicker resets, cooldown blocks then allows, absence grace+hold, multiple gestures
+- **Baseline (14):** Calibration, reset, adapt with gate, small drift absorbed, large look-away not absorbed, creep contained
+- **Evidence (9):** Header once, one row+snapshot per flag, no extra files, context manager
+- **Camera (13):** FakeSource, auto-discovery order, video file, all-fail error
+- **Pose (9):** Black frame -> None, close idempotent, context manager, helpful error on wrong MediaPipe
+- **Overlay (8):** Shape preserved, session_view not mutated, all gestures, draw_skeleton edge cases
+- **App (3):** End-to-end with FakeSource+stub pose → exactly 1 CSV row + 1 snapshot
 
 ---
 
-## Roadmap toward real edge hardware
+## Evaluation
 
-Planned, not yet implemented:
+### Guided Accuracy Test (10 attempts per gesture)
+```bash
+.venv\Scripts\python.exe tools/eval_gestures.py eval --camera 0 --out evidence
+```
+Prompts you to perform each gesture 10 times, holds for 3s. Writes `evidence/EVAL.md`.
 
-1. **Optimized inference:** export a detector/pose model to **ONNX**, run with **ONNX Runtime**, then **TensorRT** (FP16/INT8) and compare latency against the current CPU pipeline.
-2. **NVIDIA Jetson deployment:** port the pipeline, profile with `tegrastats`, and tune for power and thermals.
-3. **Object detection:** add a YOLO or RT-DETR detector for phones and smartwatches, with tracking.
-4. **Video pipeline:** GStreamer / DeepStream ingestion for RTSP and multi-camera input.
-5. **Packaging and serving:** Docker image and a small REST API for events.
-6. **Modular refactor:** split into a tested package (config, features, classifier, session, evidence, camera, pose, overlay).
+**PRD Target:** ≥ 8/10 per gesture
+
+### False-Positive Soak Test (2 min default)
+```bash
+.venv\Scripts\python.exe tools/soak_test.py --camera 0 --minutes 2 --out evidence
+```
+Sit and type normally. Reports FPS, flags detected, memory. Writes `evidence/SOAK.md`.
+
+**PRD Target:** 0 flags in 2 min; ≥ 15 FPS; 30-min run stable
+
+---
 
 ## Troubleshooting
 
-- **"No camera found" / black window:** the OS is probably blocking camera access for your terminal or IDE.
-  - *macOS:* System Settings > Privacy & Security > Camera, enable Terminal / iTerm / VS Code, then restart that app.
-  - *Windows:* Settings > Privacy & security > Camera, turn on "Let desktop apps access your camera", and check any hardware camera switch.
-  - *Linux:* make sure your user is in the `video` group and `/dev/video0` exists.
-- **Camera busy:** close Zoom, Teams, browsers or other apps using the webcam.
-- **Wrong camera opens:** use `--camera 1` (or 2, 3).
-- **`module 'mediapipe' has no attribute 'solutions'`:** reinstall with `pip install -r requirements.txt`.
-- **Low FPS:** set `model_complexity=0` in `gesture_poc.py`, or close other heavy apps.
+| Issue | Fix |
+|-------|-----|
+| "No camera found" | OS blocking camera access. **Windows:** Settings > Privacy > Camera > enable for Terminal/VS Code. **macOS:** System Settings > Privacy > Camera > enable Terminal/iTerm. **Linux:** add user to `video` group. |
+| Camera busy | Close Zoom, Teams, browsers |
+| Wrong camera opens | Use `--camera 1` (or 2, 3) |
+| `module 'mediapipe' has no attribute 'solutions'` | `pip install -r requirements.txt` (needs MediaPipe 0.10.14) |
+| Low FPS | Close heavy apps; or edit `PoseEstimator(model_complexity=0)` in `app.py` |
 
-## Limitations
+---
 
-Single person only; needs head and shoulders in view; head direction is a pose-based estimate (not eye tracking); thresholds are untuned and may vary with lighting, clothing and body type. A flag is a prompt for human review, never proof of misconduct, and any real deployment would need consent, a fairness review and a privacy assessment.
+## Privacy & Ethics
+
+- Processing is **local**; only `events.csv` and flag snapshots in `evidence/` are written
+- **No network calls**, no continuous video recording
+- Users must consent to monitoring; a flag is a **prompt for human review**, never proof
+- Known limits: single person, head+shoulders visible, pose-based head direction (not eye tracking), untuned thresholds vary with lighting/clothing/body type
+- Fairness review required before any real deployment
+
+---
+
+## Roadmap (Post-POC)
+
+1. **ONNX/TensorRT export** for optimized inference on Jetson-class hardware
+2. **Object detection** (phones, watches) with YOLO/RT-DETR + tracking
+3. **Multi-camera / RTSP** via GStreamer/DeepStream
+4. **Docker + REST API** for event serving
+5. **Face landmarks** for better gaze estimation
+
+---
+
+## License
+
+MIT — see LICENSE file.
