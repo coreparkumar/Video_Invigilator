@@ -90,6 +90,15 @@ class AudioSession:
                     if t >= cutoff and lbl in ("speech", "whisper"))
         return count * self.hop_s
 
+    def get_view(self) -> dict:
+        """Return read-only snapshot for UI/debugging."""
+        return {
+            "muted": self.muted,
+            "coverage_s": self.get_coverage(0),  # placeholder, actual now passed by caller
+            "history_len": len(self._history),
+            "last_event_time": self._last_event_time,
+        }
+
 
 if __name__ == "__main__":
     # Quick smoke test with FakeClock
