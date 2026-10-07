@@ -43,18 +43,28 @@ python -m venv .venv
 # source .venv/bin/activate      # macOS/Linux
 pip install -r requirements.txt
 
-# 2. Run
+# 2. Run video-only POC
 python -m invigilator            # or: .venv\Scripts\python.exe -m invigilator
 
-# Optional args:
+# 3. Run video + audio POC (new!)
+python gesture_poc_av.py         # or: .venv\Scripts\python.exe gesture_poc_av.py
+
+# Optional args (both apps):
 python -m invigilator --camera 1    # preferred camera index
 python -m invigilator --video file.mp4  # replay from video file
 python -m invigilator --out my_evidence  # custom output folder
 python -m invigilator --no-snapshots     # disable snapshot saving
+
+# Audio-specific args (gesture_poc_av.py only):
+python gesture_poc_av.py --audio-device 1  # preferred mic index
+python gesture_poc_av.py --no-audio        # disable audio
+python gesture_poc_av.py --wav file.wav    # replay from audio file
 ```
 
 ### Keys
 - `c` — Calibrate neutral posture (sit normally, face screen, press)
+- `n` — Recalibrate audio noise floor (stay quiet, press `n`) **[Audio]**
+- `m` — Mute/unmute audio **[Audio]**
 - `s` — Toggle skeleton overlay
 - `q` — Quit
 
@@ -166,6 +176,88 @@ Prompts you to perform each gesture 10 times, holds for 3s. Writes `evidence/EVA
 Sit and type normally. Reports FPS, flags detected, memory. Writes `evidence/SOAK.md`.
 
 **PRD Target:** 0 flags in 2 min; ≥ 15 FPS; 30-min run stable
+
+---
+
+## Audio Extension: Voice + Video Testing
+
+The `gesture_poc_av.py` adds real-time audio detection (whisper/talking) fused with video cues.
+
+### Quick Audio Test (No Hardware)
+```bash
+# Synthetic self-test (validates pipeline on synthetic signals)
+python tools/audio_selftest.py
+```
+
+### Live Audio + Video Test (9 Stages)
+```bash
+# Full guided test (camera + microphone)
+python tools/av_check.py --camera 0 --device 0 --out evidence
+
+# Audio only
+python tools/av_check.py --no-video --device 0 --out evidence
+
+# Video only
+python tools/av_check.py --no-audio --camera 0 --out evidence
+
+# Specific stages only
+python tools/av_check.py --stages 2,5,8 --out evidence
+```
+
+### 9-Stage Guided Test
+| # | Stage | Duration | Action | Expected |
+|---|-------|----------|--------|----------|
+| 1 | Device Check | 2s | Verify camera/mic | Both open |
+| 2 | Audio Calibration | 6s | **Stay quiet** | `calibration_ok` |
+| 3 | Video Calibration | 3s | Sit normally | Visual check |
+| 4 | Negative Control | 15s | Silent & still | No alerts/events |
+| 5 | Audio: Whisper | 7s | Whisper continuously | Audio event: "whispering" |
+| 6 | Audio: Speech | 7s | Speak normally | Audio event: "talking" |
+| 7 | Video: Look Left + Hand | 6s | Look left 3s, raise hand 2s | Video cue ≥1.5s |
+| 8 | Fused: Whisper + Look Left | 9s | Whisper while looking left | Fused "alert" |
+| 9 | Burst Control | 3s | Cough/rustle paper | No audio event |
+
+### Audio Calibration Status
+| Status | Meaning | Action |
+|--------|---------|--------|
+| `OK` | Calibration successful | Proceed |
+| `NO_SIGNAL` | Mic muted/unplugged/wrong device | Check connection, try `--device N`, press `n` |
+| `CLIPPING` | Gain too high (peak ≥ 0.98) | Lower OS mic gain, press `n` |
+| `TOO_LOUD` | Level > -25 dB | Lower gain or move back, press `n` |
+| `NOISY` | Std dev > 4 dB during cal | Quiet room, close windows, press `n` |
+
+### Audio Keys
+| Key | Action |
+|-----|--------|
+| `c` | Calibrate video posture |
+| `n` | Recalibrate audio noise floor (stay quiet first!) |
+| `m` | Mute/unmute audio |
+| `s` | Toggle skeleton overlay |
+| `q` | Quit |
+
+### Audio Evaluation Tools
+```bash
+# Live microphone meter (calibrates 5s, then level bar)
+python tools/audio_meter.py --device 0
+
+# Offline WAV analysis (timeline + summary)
+python tools/audio_replay.py recording.wav
+
+# Batch evaluation from manifest CSV (requires consent_ok=yes)
+python tools/audio_eval_sweep.py manifest.csv
+# Writes docs/AUDIO_EVAL.md with detection rates by distance/noise
+
+# Ablation study: video-only vs audio-only vs fused
+python tools/eval_ablation.py sessions.csv
+# Writes docs/ABLATION.md with precision/recall/F1
+```
+
+**PRD Targets (Audio):**
+- ≥ 8/10 per gesture (whisper, speech, cough, rustle)
+- 0 flags in 2-min quiet soak
+- ≥ 15 FPS end-to-end
+
+See `AUDIO_EXTENSION.md` for complete testing guide.
 
 ---
 
