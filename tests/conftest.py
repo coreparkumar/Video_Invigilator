@@ -1,6 +1,12 @@
 """Test fixtures and helpers for Edge Invigilator POC."""
 import math
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+
+# Ensure repo root is on sys.path for `import audio` etc.
+REPO_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 
 def make_landmarks(overrides=None):
