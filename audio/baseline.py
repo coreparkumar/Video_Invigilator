@@ -130,6 +130,62 @@ class NoiseFloor:
         self._band_stds = None
 
 
+# ---- Calibration Quality ---------------------------------------------------
+from enum import Enum
+
+class CalibrationStatus(Enum):
+    OK = "ok"
+    NO_SIGNAL = "no_signal"
+    CLIPPING = "clipping"
+    TOO_LOUD = "too_loud"
+    NOISY = "noisy"
+
+
+def calibration_quality(frame_db: np.ndarray, peak: float) -> tuple[CalibrationStatus, str]:
+    """Evaluate calibration quality from frame speech-band dB values and peak.
+
+    Args:
+        frame_db: concatenated frame-level speech-band dB values from calibration
+        peak: maximum absolute sample value during calibration
+
+    Returns:
+        (status, message) - status enum and user-facing message
+    """
+    from audio.config import (
+        CAL_MAX_STD_DB, CAL_MIN_LEVEL_DB, CAL_MAX_LEVEL_DB, CLIP_PEAK
+    )
+
+    if len(frame_db) == 0:
+        return CalibrationStatus.NO_SIGNAL, "No calibration data received"
+
+    mean_db = float(np.mean(frame_db))
+    std_db = float(np.std(frame_db))
+    peak_abs = float(peak)
+
+    # Priority order of checks
+    if mean_db < CAL_MIN_LEVEL_DB:
+        return (CalibrationStatus.NO_SIGNAL,
+                f"Input level too low ({mean_db:.1f} dB). Microphone muted, unplugged, or wrong device selected. "
+                f"Check connection and press 'n' to recalibrate.")
+
+    if peak_abs >= CLIP_PEAK:
+        return (CalibrationStatus.CLIPPING,
+                f"Input clipping detected (peak={peak_abs:.2f}). Lower microphone gain in OS settings "
+                f"and press 'n' to recalibrate.")
+
+    if mean_db > CAL_MAX_LEVEL_DB:
+        return (CalibrationStatus.TOO_LOUD,
+                f"Input level too high ({mean_db:.1f} dB). Reduce microphone gain or move further away "
+                f"and press 'n' to recalibrate.")
+
+    if std_db > CAL_MAX_STD_DB:
+        return (CalibrationStatus.NOISY,
+                f"Environment noisy during calibration (std={std_db:.2f} dB). Stay quiet, close windows/doors, "
+                f"turn off fans, and press 'n' to recalibrate.")
+
+    return CalibrationStatus.OK, "Calibration OK"
+
+
 if __name__ == "__main__":
     # Quick smoke test
     import numpy as np

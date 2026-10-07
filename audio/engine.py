@@ -5,8 +5,9 @@ import numpy as np
 from audio.pipeline import AudioPipeline
 from audio.session import AudioSession
 from audio.fusion import Fusion, Alert
-from audio.config import HOP_S, AUDIO_HOLD_S
+from audio.config import HOP_S, AUDIO_HOLD_S, CLIP_PEAK
 from audio.capture import AudioSource
+from audio.baseline import CalibrationStatus
 
 
 class AudioEngine:
@@ -30,6 +31,22 @@ class AudioEngine:
     @property
     def calibrating(self) -> bool:
         return self._pipeline.calibrating
+
+    @property
+    def calibration_status(self) -> CalibrationStatus:
+        return self._pipeline.calibration_status
+
+    @property
+    def calibration_message(self) -> str:
+        return self._pipeline.calibration_message
+
+    @property
+    def input_peak(self) -> float:
+        return self._pipeline.input_peak
+
+    @property
+    def clipping(self) -> bool:
+        return self._pipeline.clipping
 
     @property
     def muted(self) -> bool:

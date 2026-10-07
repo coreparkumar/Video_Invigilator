@@ -8,10 +8,10 @@ import numpy as np
 
 from audio.config import (
     SAMPLE_RATE, FRAME, WINDOW_S, HOP_S,
-    CALIBRATION_S, SPEECH_BAND
+    CALIBRATION_S, SPEECH_BAND, CLIP_PEAK
 )
 from audio.features import window_features
-from audio.baseline import NoiseFloor
+from audio.baseline import NoiseFloor, calibration_quality, CalibrationStatus
 from audio.detector import classify_window, DetectionResult
 
 
@@ -50,6 +50,11 @@ class AudioPipeline:
         self._calibration_frames: List[np.ndarray] = []
         self._calibration_hops_needed = int(CALIBRATION_S / HOP_S) if auto_calibrate else 0
 
+        # Calibration quality tracking
+        self._calibration_peak: float = 0.0
+        self._calibration_status: CalibrationStatus = CalibrationStatus.OK
+        self._calibration_message: str = ""
+
         # Statistics
         self._total_hops = 0
 
@@ -61,6 +66,25 @@ class AudioPipeline:
     def calibrating(self) -> bool:
         return self._calibrating
 
+    @property
+    def calibration_status(self) -> CalibrationStatus:
+        return self._calibration_status
+
+    @property
+    def calibration_message(self) -> str:
+        return self._calibration_message
+
+    @property
+    def input_peak(self) -> float:
+        """Peak absolute sample value from the most recent push."""
+        # This would need to be tracked in push() - we'll add tracking
+        return getattr(self, '_last_input_peak', 0.0)
+
+    @property
+    def clipping(self) -> bool:
+        """Whether the most recent input had clipping."""
+        return self.input_peak >= CLIP_PEAK
+
     def push(self, samples: np.ndarray) -> List[WindowResult]:
         """Push new samples into the pipeline.
 
@@ -68,6 +92,9 @@ class AudioPipeline:
         """
         if len(samples) == 0:
             return []
+
+        # Track peak for clipping detection
+        self._last_input_peak = float(np.max(np.abs(samples))) if len(samples) > 0 else 0.0
 
         self._buffer = np.concatenate([self._buffer, samples.astype(np.float32)])
         results = []
@@ -83,6 +110,9 @@ class AudioPipeline:
             feats = window_features(window, self.sr)
 
             if self._calibrating:
+                # Track peak during calibration
+                self._calibration_peak = max(self._calibration_peak, self._last_input_peak)
+
                 # Collect speech-band frames for calibration
                 self._calibration_frames.append(feats["frame_speech_db"])
                 result = WindowResult(
@@ -97,8 +127,18 @@ class AudioPipeline:
                     # Finish calibration
                     all_frames = np.concatenate(self._calibration_frames)
                     self._floor.calibrate(all_frames)
+
+                    # Evaluate calibration quality
+                    status, message = calibration_quality(
+                        np.concatenate(self._calibration_frames),
+                        self._calibration_peak
+                    )
+                    self._calibration_status = status
+                    self._calibration_message = message
+
                     self._calibrating = False
                     self._calibration_frames = []
+                    self._calibration_peak = 0.0
             else:
                 # Classify
                 det_result = classify_window(feats, self._floor)
@@ -143,6 +183,10 @@ class AudioPipeline:
             "calibrated": self._floor.calibrated,
             "floor_mean_db": self._floor.mean_db,
             "floor_threshold_db": self._floor.threshold_db,
+            "calibration_status": self._calibration_status.value,
+            "calibration_message": self._calibration_message,
+            "input_peak": self.input_peak,
+            "clipping": self.clipping,
             "total_hops": self._total_hops,
             "buffer_dur_s": len(self._buffer) / self.sr,
         }

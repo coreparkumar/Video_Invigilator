@@ -17,6 +17,12 @@ MARGIN_STD_MULT = 4.0    # ...or this many floor standard deviations
 FLOOR_TAU_S = 60.0       # slow adaptation time constant
 FLOOR_GATE = 0.5         # adapt only within this fraction of the margin
 
+# ---- calibration quality ----------------------------------------------------
+CAL_MAX_STD_DB = 4.0      # max std of speech-band level during calibration (UNTUNED)
+CAL_MIN_LEVEL_DB = -100.0 # min mean level for valid calibration (muted/dead mic)
+CAL_MAX_LEVEL_DB = -25.0  # max mean level for valid calibration (too loud)
+CLIP_PEAK = 0.98          # clipping threshold (peak |sample|, UNTUNED)
+
 # ---- window classifier -----------------------------------------------------
 ACTIVE_FRAC_SUSTAINED = 0.4   # below this share of active frames: short burst
 LEVEL_STD_MIN_DB = 2.5        # speech/whisper fluctuate (syllables); steady noise does not

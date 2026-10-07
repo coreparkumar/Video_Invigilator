@@ -172,5 +172,90 @@ def test_default_unconservative():
     assert f.threshold_db == -40.0
 
 
+def test_calibration_quality_ok():
+    """Normal ambient calibrates to OK."""
+    from audio.baseline import calibration_quality, CalibrationStatus
+    import numpy as np
+    
+    # Simulate normal ambient calibration data
+    frame_db = np.full(100, -62.0, dtype=np.float32) + np.random.default_rng(42).normal(0, 0.5, 100)
+    peak = 0.01  # well below clipping
+    
+    status, msg = calibration_quality(frame_db, peak)
+    assert status == CalibrationStatus.OK
+    assert "OK" in msg
+
+
+def test_calibration_quality_no_signal():
+    """Very low level -> NO_SIGNAL."""
+    from audio.baseline import calibration_quality, CalibrationStatus
+    import numpy as np
+    from audio.config import CAL_MIN_LEVEL_DB
+    
+    # Very low level (below -100 dB)
+    frame_db = np.full(100, CAL_MIN_LEVEL_DB - 10.0, dtype=np.float32)
+    peak = 0.0001
+    
+    status, msg = calibration_quality(frame_db, peak)
+    assert status == CalibrationStatus.NO_SIGNAL
+    assert "too low" in msg.lower() or "muted" in msg.lower()
+
+
+def test_calibration_quality_clipping():
+    """High peak -> CLIPPING."""
+    from audio.baseline import calibration_quality, CalibrationStatus
+    import numpy as np
+    from audio.config import CLIP_PEAK
+    
+    # Normal level but high peak
+    frame_db = np.full(100, -50.0, dtype=np.float32)
+    peak = CLIP_PEAK + 0.01  # above clipping threshold
+    
+    status, msg = calibration_quality(frame_db, peak)
+    assert status == CalibrationStatus.CLIPPING
+    assert "clipping" in msg.lower() or "gain" in msg.lower()
+
+
+def test_calibration_quality_too_loud():
+    """Very high mean level -> TOO_LOUD."""
+    from audio.baseline import calibration_quality, CalibrationStatus
+    import numpy as np
+    from audio.config import CAL_MAX_LEVEL_DB
+    
+    # Very high mean level
+    frame_db = np.full(100, CAL_MAX_LEVEL_DB + 10.0, dtype=np.float32)
+    peak = 0.1  # not clipping
+    
+    status, msg = calibration_quality(frame_db, peak)
+    assert status == CalibrationStatus.TOO_LOUD
+    assert "too high" in msg.lower() or "too loud" in msg.lower()
+
+
+def test_calibration_quality_noisy():
+    """High std deviation -> NOISY."""
+    from audio.baseline import calibration_quality, CalibrationStatus
+    import numpy as np
+    from audio.config import CAL_MAX_STD_DB
+    
+    # High std deviation (noisy)
+    base = -60.0
+    frame_db = base + np.random.default_rng(42).normal(0, CAL_MAX_STD_DB * 2, 100)
+    peak = 0.1
+    
+    status, msg = calibration_quality(frame_db, peak)
+    assert status == CalibrationStatus.NOISY
+    assert "noisy" in msg.lower() or "quiet" in msg.lower()
+
+
+def test_calibration_quality_empty():
+    """Empty array returns NO_SIGNAL status."""
+    from audio.baseline import calibration_quality, CalibrationStatus
+    import numpy as np
+    
+    status, msg = calibration_quality(np.array([]), 0.0)
+    assert status == CalibrationStatus.NO_SIGNAL
+    assert "No calibration data" in msg
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

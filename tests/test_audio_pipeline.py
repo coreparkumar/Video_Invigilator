@@ -232,5 +232,69 @@ def test_pipeline_no_files_created(tmp_path):
         os.chdir(old_cwd)
 
 
+def test_pipeline_calibration_status_ok():
+    """Pipeline reports OK calibration status for normal ambient."""
+    pipe = AudioPipeline(t0=0.0, auto_calibrate=True)
+    signal = ambient(6.0, db=-62, seed=10)
+    pipe.push(signal)
+    
+    assert pipe.calibration_status.value == "ok"
+    assert "OK" in pipe.calibration_message or "ok" in pipe.calibration_message.lower()
+
+
+def test_pipeline_calibration_status_no_signal():
+    """Pipeline detects NO_SIGNAL for muted/dead mic."""
+    pipe = AudioPipeline(t0=0.0, auto_calibrate=True)
+    signal = np.zeros(88000, dtype=np.float32)  # 5.5s silence
+    pipe.push(signal)
+    
+    assert pipe.calibration_status.value == "no_signal"
+    assert "low" in pipe.calibration_message.lower() or "muted" in pipe.calibration_message.lower()
+
+
+def test_pipeline_calibration_status_clipping():
+    """Pipeline detects CLIPPING for overdriven input."""
+    pipe = AudioPipeline(t0=0.0, auto_calibrate=True)
+    # Full-scale signal (0 dBFS) for 5.5s
+    signal = np.ones(88000, dtype=np.float32) * 1.0
+    pipe.push(signal)
+    
+    assert pipe.calibration_status.value == "clipping"
+    assert "clipping" in pipe.calibration_message.lower() or "gain" in pipe.calibration_message.lower()
+
+
+def test_pipeline_input_peak_and_clipping():
+    """Pipeline tracks input peak and detects clipping."""
+    pipe = AudioPipeline(t0=0.0, auto_calibrate=False)
+    pipe.floor.calibrate(np.array([-60.0] * 100))
+    
+    # Normal signal - no clipping
+    normal = np.random.default_rng(1).normal(0, 0.1, 8000).astype(np.float32)
+    pipe.push(normal)
+    assert not pipe.clipping
+    assert pipe.input_peak < 0.5
+    
+    # Clipped signal
+    clipped = np.ones(8000, dtype=np.float32) * 1.0
+    pipe.push(clipped)
+    assert pipe.clipping
+    assert pipe.input_peak >= 0.98
+
+
+def test_pipeline_calibration_status_in_get_state():
+    """get_state includes calibration status and message."""
+    pipe = AudioPipeline(t0=0.0, auto_calibrate=True)
+    signal = ambient(6.0, db=-62, seed=10)
+    pipe.push(signal)
+    
+    state = pipe.get_state()
+    assert "calibration_status" in state
+    assert "calibration_message" in state
+    assert state["calibration_status"] == "ok"
+    assert "input_peak" in state
+    assert "clipping" in state
+    assert state["clipping"] is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
