@@ -1,0 +1,247 @@
+"""
+Edge Invigilator POC with Audio: video + audio gesture detection from a laptop webcam.
+
+Single laptop, single camera, fully local (no network, no cloud, no continuous video
+except a snapshot when a flagged event fires).
+
+Run:   python gesture_poc_av.py
+Keys:  c = calibrate neutral posture (sit normally, look at screen, then press)
+       n = recalibrate noise floor (stay quiet, then press)
+       m = mute/unmute audio
+       s = toggle skeleton overlay
+       q = quit
+"""
+import argparse
+import csv
+import math
+import os
+import time
+from datetime import datetime
+
+import cv2
+import mediapipe as mp
+
+from invigilator.config import (
+    GESTURES, THRESHOLDS, DEFAULT_BASELINE, COOLDOWN_S, VIS_MIN,
+    ABSENT_GRACE_S, BASELINE_TAU_S, BASELINE_GATE, CAMERA_SCAN,
+    NOSE, L_EAR, R_EAR, L_SH, R_SH, L_WR, R_WR,
+)
+from invigilator.session import InvigilatorSession
+from invigilator.evidence import EvidenceLog
+from invigilator.overlay import render_overlay
+from invigilator.camera import open_source
+from invigilator.pose import PoseEstimator
+
+# Audio imports
+from audio.engine import AudioEngine
+from audio.camera import open_camera as open_audio_camera
+from audio.config import HOP_S
+
+
+def dist(a, b):
+    return math.hypot(a.x - b.x, a.y - b.y)
+
+
+def measures(lm):
+    """Scale-invariant posture measurements from pose landmarks."""
+    sh_w = max(dist(lm[L_SH], lm[R_SH]), 1e-6)
+    mid_sh_y = (lm[L_SH].y + lm[R_SH].y) / 2
+    ear_mid_x = (lm[L_EAR].x + lm[R_EAR].x) / 2
+    ear_w = max(abs(lm[L_EAR].x - lm[R_EAR].x), 1e-6)
+    return {
+        "sh_w": sh_w,
+        "yaw": (lm[NOSE].x - ear_mid_x) / ear_w,
+        "neck": (mid_sh_y - lm[NOSE].y) / sh_w,
+        "tilt": math.degrees(math.atan2(lm[R_SH].y - lm[L_SH].y,
+                                        abs(lm[R_SH].x - lm[L_SH].x))),
+    }
+
+
+def classify(lm, base=None, th=THRESHOLDS):
+    """Return the set of gesture keys currently active for one frame."""
+    active = set()
+    m = measures(lm)
+    b = base or DEFAULT_BASELINE
+    nose, sh_w = lm[NOSE], m["sh_w"]
+    ears = [lm[L_EAR], lm[R_EAR]]
+
+    for wr in (lm[L_WR], lm[R_WR]):
+        if wr.visibility < VIS_MIN:
+            continue
+        above_nose = wr.y < nose.y - th["hand_raised_above_nose"] * sh_w
+        if above_nose:
+            active.add("hand_raised")
+        d_ear = min(dist(wr, e) for e in ears)
+        if dist(wr, nose) < th["hand_to_face_dist"] * sh_w:
+            active.add("hand_to_face")
+        elif d_ear < th["hand_to_ear_dist"] * sh_w and not above_nose:
+            active.add("hand_to_ear")
+
+    dyaw = m["yaw"] - b["yaw"]
+    if dyaw > th["yaw_shift"]:
+        active.add("look_right")
+    elif dyaw < -th["yaw_shift"]:
+        active.add("look_left")
+    if m["neck"] < b["neck"] * th["neck_ratio"]:
+        active.add("look_down")
+    if abs(m["tilt"] - b["tilt"]) > th["tilt_deg"]:
+        active.add("leaning")
+    return active
+
+
+def near_neutral(m, base, th=THRESHOLDS, gate=BASELINE_GATE):
+    """True if posture is well inside every limit (safe to adapt baseline)."""
+    return (abs(m["yaw"] - base["yaw"]) < gate * th["yaw_shift"]
+            and m["neck"] > base["neck"] * (1 - gate * (1 - th["neck_ratio"]))
+            and abs(m["tilt"] - base["tilt"]) < gate * th["tilt_deg"])
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--camera", type=int, default=0, help="preferred camera index")
+    ap.add_argument("--audio-device", type=int, default=None, help="audio input device index")
+    ap.add_argument("--video-file", type=str, default=None, help="video file for replay")
+    ap.add_argument("--audio-file", type=str, default=None, help="audio file for replay")
+    ap.add_argument("--out", default="evidence", help="folder for snapshots + log")
+    ap.add_argument("--no-snapshots", action="store_true", help="disable snapshot saving")
+    ap.add_argument("--no-audio", action="store_true", help="disable audio processing")
+    args = ap.parse_args()
+
+    # Open video source
+    if args.video_file:
+        print(f"Opening video file: {args.video_file}")
+        video_source = open_source(args.video_file)
+    else:
+        video_source = open_camera(args.camera)
+
+    # Open audio source
+    audio_source = None
+    if not args.no_audio:
+        if args.audio_file:
+            print(f"Opening audio file: {args.audio_file}")
+            from audio.capture import WavSource
+            audio_source = WavSource(args.audio_file)
+        else:
+            print("Opening audio device...")
+            audio_source = open_audio_camera(args.audio_device)
+
+    # Initialize modules
+    session = InvigilatorSession(args.out, enable_snapshots=not args.no_snapshots)
+    pose = PoseEstimator()
+    drawer, styles = mp.solutions.drawing_utils, mp.solutions.drawing_styles
+    show_skel = True
+
+    # Audio engine
+    audio_engine = None
+    if audio_source:
+        audio_engine = AudioEngine(audio_source, enabled=True)
+
+    show_audio_meter = True
+    fps, fps_t = 0.0, time.time()
+
+    try:
+        while True:
+            # Read video frame
+            ok, frame = video_source.read()
+            if not ok:
+                break
+            frame = cv2.flip(frame, 1)  # mirror
+            now = time.time()
+
+            # Process video pose
+            res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            lm = res.pose_landmarks.landmark if res.pose_landmarks else None
+            if res.pose_landmarks and show_skel:
+                drawer.draw_landmarks(
+                    frame, res.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS,
+                    landmark_drawing_spec=styles.get_default_pose_landmarks_style())
+
+            # Update video session
+            session.update(lm, frame, now)
+
+            # Process audio
+            audio_alerts = []
+            if audio_engine:
+                video_active = session.active if lm else set()
+                audio_alerts = audio_engine.step(now, video_active=video_active)
+
+                # Log audio alerts to evidence
+                for alert in audio_alerts:
+                    session._record_audio_alert(alert, frame)
+
+            # Calculate FPS
+            fps = 0.9 * fps + 0.1 / max(now - fps_t, 1e-6)
+            fps_t = now
+
+            # Render overlay
+            session_view = session.get_view()
+            # Add audio info to session view for overlay
+            if audio_engine:
+                session_view["audio_calibrating"] = audio_engine.calibrating
+                session_view["audio_muted"] = audio_engine.muted
+                session_view["audio_floor_db"] = audio_engine._pipeline.floor.mean_db
+                session_view["audio_threshold_db"] = audio_engine._pipeline.floor.threshold_db
+
+            frame = render_overlay(frame, session_view, fps, now)
+
+            # Audio meter overlay
+            if audio_engine and show_audio_meter and not audio_engine.calibrating:
+                h, w = frame.shape[:2]
+                floor_db = audio_engine._pipeline.floor.mean_db
+                thresh_db = audio_engine._pipeline.floor.threshold_db
+                level_db = audio_engine._pipeline.get_state().get("floor_mean_db", -60)
+                # Draw meter on right side
+                meter_x = w - 80
+                meter_y = 50
+                meter_h = 200
+                # Background
+                cv2.rectangle(frame, (meter_x, meter_y), (meter_x + 30, meter_y + meter_h), (0, 0, 0), -1)
+                # Floor line
+                if floor_db is not None:
+                    floor_y = int(meter_y + meter_h * (1 - (floor_db + 60) / 40))
+                    cv2.line(frame, (meter_x, floor_y), (meter_x + 30, floor_y), (100, 100, 100), 1)
+                # Threshold line
+                if thresh_db is not None:
+                    thresh_y = int(meter_y + meter_h * (1 - (thresh_db + 60) / 40))
+                    cv2.line(frame, (meter_x, thresh_y), (meter_x + 30, thresh_y), (0, 255, 255), 1)
+                # Current level
+                if level_db is not None:
+                    level_y = int(meter_y + meter_h * (1 - (level_db + 60) / 40))
+                    level_y = max(meter_y, min(meter_y + meter_h, level_y))
+                    cv2.line(frame, (meter_x, level_y), (meter_x + 30, level_y), (0, 255, 0), 2)
+
+                # Calibration status
+                if audio_engine.calibrating:
+                    cv2.putText(frame, "CALIBRATING...", (meter_x - 60, meter_y - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 255), 1)
+
+            cv2.imshow("Edge Invigilator POC (Video + Audio)", frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            elif key == ord("s"):
+                show_skel = not show_skel
+            elif key == ord("c") and lm is not None:
+                b = session.calibrate(lm)
+                print("Calibrated:", {k: round(v, 3) for k, v in b.items()})
+            elif key == ord("n") and audio_engine:
+                audio_engine.recalibrate()
+                print("Audio recalibration started")
+            elif key == ord("m") and audio_engine:
+                audio_engine.toggle_mute()
+                print("Audio muted" if audio_engine.muted else "Audio unmuted")
+
+    finally:
+        video_source.release()
+        if audio_source:
+            audio_source.close()
+        if audio_engine:
+            audio_engine.close()
+        pose.close()
+        session.close()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

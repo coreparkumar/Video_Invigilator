@@ -141,6 +141,15 @@ class FakeAudioSource(AudioSource):
     def close(self) -> None:
         pass
 
+    def release(self) -> None:
+        """Alias for close() for compatibility with engine."""
+        self.close()
+
+
+def open_camera(device: Optional[int] = None, sr: int = 16000) -> MicSource:
+    """Open a microphone source (convenience function matching video open_camera)."""
+    return MicSource(device=device, sr=sr)
+
 
 def _linear_resample(x: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
     """Linear interpolation resample."""
