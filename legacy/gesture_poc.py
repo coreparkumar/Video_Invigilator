@@ -30,6 +30,7 @@ GESTURES = {
     "hand_to_face":  ("Hand covering face/mouth",      2.0),
     "look_left":     ("Looking left",                  2.5),
     "look_right":    ("Looking right",                 2.5),
+    "look_up":       ("Looking up",                    2.5),
     "look_down":     ("Looking down",                  4.0),
     "leaning":       ("Leaning sideways",              2.5),
     "out_of_frame":  ("Out of frame / left seat",      3.0),
@@ -42,12 +43,14 @@ THRESHOLDS = {
     "hand_to_ear_dist":       0.30,  # wrist-to-ear distance (x sh_w)
     "yaw_shift":              0.45,  # nose offset from ear midpoint vs baseline (x ear width)
     "neck_ratio":             0.55,  # looking down if neck < baseline * this
+    "neck_ratio_up":          1.25,  # looking up if neck > baseline * this (UNTUNED)
     "tilt_deg":               14.0,  # shoulder-line tilt change vs baseline (degrees)
 }
 
 DEFAULT_BASELINE = {"yaw": 0.0, "neck": 0.65, "tilt": 0.0}   # used before calibration
 COOLDOWN_S = 5.0          # min gap between repeat flags of the same gesture
 VIS_MIN = 0.5             # landmark visibility threshold
+VIS_MIN_PARTIAL = 0.3     # pose found but key landmarks below this -> PARTIAL (UNTUNED)
 ABSENT_GRACE_S = 0.5      # no-person time before "out of frame" starts counting
 
 # Dynamic baseline: slowly follows the user's neutral posture (chair shifts etc.)
@@ -114,6 +117,8 @@ def classify(lm, base=None, th=THRESHOLDS):
         active.add("look_left")
     if m["neck"] < b["neck"] * th["neck_ratio"]:
         active.add("look_down")
+    if m["neck"] > b["neck"] * th["neck_ratio_up"]:
+        active.add("look_up")
     if abs(m["tilt"] - b["tilt"]) > th["tilt_deg"]:
         active.add("leaning")
     return active
@@ -149,6 +154,7 @@ class InvigilatorSession:
         self.banners = []                    # (expire_time, text)
         self._absent_since = None
         self._last_t = None
+        self.frame_state = "OUT"             # IN, PARTIAL, OUT
 
     # -- calibration -------------------------------------------------------
     def calibrate(self, lm):
@@ -169,13 +175,28 @@ class InvigilatorSession:
 
         if lm is not None:
             self._absent_since = None
-            if min(lm[i].visibility for i in (NOSE, L_SH, R_SH)) > VIS_MIN:
+            # Check visibility of key landmarks (NOSE, L_SH, R_SH)
+            key_vis = [lm[i].visibility for i in (NOSE, L_SH, R_SH)]
+            min_vis = min(key_vis)
+
+            if min_vis > VIS_MIN:
+                # All key landmarks clearly visible -> IN
+                self.frame_state = "IN"
                 active = classify(lm, self.base)
                 if self.base and not active:
                     m = measures(lm)
                     if near_neutral(m, self.base):
                         self._adapt_baseline(m, dt)
+            elif min_vis > VIS_MIN_PARTIAL:
+                # Pose found but some key landmarks have low visibility -> PARTIAL
+                self.frame_state = "PARTIAL"
+                # No classification, no baseline adaptation
+            else:
+                # Key landmarks too unreliable -> treat as no reliable pose
+                self.frame_state = "PARTIAL"
         else:
+            # No person detected
+            self.frame_state = "OUT"
             self._absent_since = self._absent_since or now
             if now - self._absent_since > ABSENT_GRACE_S:
                 active.add("out_of_frame")

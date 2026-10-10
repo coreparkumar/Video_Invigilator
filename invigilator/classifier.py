@@ -64,6 +64,10 @@ def classify(lm: list[SimpleNamespace],
     if m["neck"] < b["neck"] * th["neck_ratio"]:
         active.add("look_down")
 
+    # Looking up: neck ratio above threshold
+    if m["neck"] > b["neck"] * th["neck_ratio_up"]:
+        active.add("look_up")
+
     # Leaning: shoulder tilt deviation from baseline
     if abs(m["tilt"] - b["tilt"]) > th["tilt_deg"]:
         active.add("leaning")

@@ -43,16 +43,21 @@ from invigilator.config import (
 
 
 def test_gestures_match_legacy():
-    """GESTURES keys and values must match legacy exactly."""
-    assert set(GESTURES.keys()) == set(LEGACY_GESTURES.keys())
-    for key in GESTURES:
+    """GESTURES must contain all legacy keys with matching values; new keys allowed."""
+    # All legacy keys must be present with same values
+    for key in LEGACY_GESTURES:
+        assert key in GESTURES, f"Missing legacy key: {key}"
         assert GESTURES[key].label == LEGACY_GESTURES[key][0]
         assert GESTURES[key].hold_seconds == LEGACY_GESTURES[key][1]
+    # New keys allowed (e.g., look_up)
 
 
 def test_thresholds_match_legacy():
-    """THRESHOLDS must match legacy exactly."""
-    assert THRESHOLDS == LEGACY_THRESHOLDS
+    """THRESHOLDS must contain all legacy keys with matching values; new keys allowed."""
+    for key in LEGACY_THRESHOLDS:
+        assert key in THRESHOLDS, f"Missing legacy threshold: {key}"
+        assert THRESHOLDS[key] == LEGACY_THRESHOLDS[key]
+    # New thresholds allowed (e.g., neck_ratio_up)
 
 
 def test_default_baseline_matches_legacy():

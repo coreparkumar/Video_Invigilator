@@ -30,6 +30,7 @@ GESTURES = {
     "hand_to_face":  ("Hand covering face/mouth",      2.0),
     "look_left":     ("Looking left",                  2.5),
     "look_right":    ("Looking right",                 2.5),
+    "look_up":       ("Looking up",                    2.5),
     "look_down":     ("Looking down",                  4.0),
     "leaning":       ("Leaning sideways",              2.5),
     "out_of_frame":  ("Out of frame / left seat",      3.0),
@@ -42,6 +43,7 @@ THRESHOLDS = {
     "hand_to_ear_dist":       0.30,  # wrist-to-ear distance (x sh_w)
     "yaw_shift":              0.45,  # nose offset from ear midpoint vs baseline (x ear width)
     "neck_ratio":             0.55,  # looking down if neck < baseline * this
+    "neck_ratio_up":          1.25,  # looking up if neck > baseline * this (UNTUNED)
     "tilt_deg":               14.0,  # shoulder-line tilt change vs baseline (degrees)
 }
 
@@ -114,6 +116,8 @@ def classify(lm, base=None, th=THRESHOLDS):
         active.add("look_left")
     if m["neck"] < b["neck"] * th["neck_ratio"]:
         active.add("look_down")
+    if m["neck"] > b["neck"] * th["neck_ratio_up"]:
+        active.add("look_up")
     if abs(m["tilt"] - b["tilt"]) > th["tilt_deg"]:
         active.add("leaning")
     return active

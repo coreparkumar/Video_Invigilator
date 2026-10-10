@@ -12,18 +12,15 @@ Keys:  c = calibrate neutral posture (sit normally, look at screen, then press)
        q = quit
 """
 import argparse
-import csv
-import math
 import os
 import time
-from datetime import datetime
 
 import cv2
 import mediapipe as mp
 
 from invigilator.config import (
     GESTURES, THRESHOLDS, DEFAULT_BASELINE, COOLDOWN_S, VIS_MIN,
-    ABSENT_GRACE_S, BASELINE_TAU_S, BASELINE_GATE, CAMERA_SCAN,
+    VIS_MIN_PARTIAL, ABSENT_GRACE_S, BASELINE_TAU_S, BASELINE_GATE, CAMERA_SCAN,
     NOSE, L_EAR, R_EAR, L_SH, R_SH, L_WR, R_WR,
 )
 from invigilator.session import InvigilatorSession
@@ -31,69 +28,13 @@ from invigilator.evidence import EvidenceLog
 from invigilator.overlay import render as render_overlay
 from invigilator.camera import open_camera
 from invigilator.pose import PoseEstimator
+from invigilator.features import measures, dist
+from invigilator.classifier import classify
 
 # Audio imports
 from audio.engine import AudioEngine
 from audio.camera import open_camera as open_audio_camera
 from audio.config import HOP_S
-
-
-def dist(a, b):
-    return math.hypot(a.x - b.x, a.y - b.y)
-
-
-def measures(lm):
-    """Scale-invariant posture measurements from pose landmarks."""
-    sh_w = max(dist(lm[L_SH], lm[R_SH]), 1e-6)
-    mid_sh_y = (lm[L_SH].y + lm[R_SH].y) / 2
-    ear_mid_x = (lm[L_EAR].x + lm[R_EAR].x) / 2
-    ear_w = max(abs(lm[L_EAR].x - lm[R_EAR].x), 1e-6)
-    return {
-        "sh_w": sh_w,
-        "yaw": (lm[NOSE].x - ear_mid_x) / ear_w,
-        "neck": (mid_sh_y - lm[NOSE].y) / sh_w,
-        "tilt": math.degrees(math.atan2(lm[R_SH].y - lm[L_SH].y,
-                                        abs(lm[R_SH].x - lm[L_SH].x))),
-    }
-
-
-def classify(lm, base=None, th=THRESHOLDS):
-    """Return the set of gesture keys currently active for one frame."""
-    active = set()
-    m = measures(lm)
-    b = base or DEFAULT_BASELINE
-    nose, sh_w = lm[NOSE], m["sh_w"]
-    ears = [lm[L_EAR], lm[R_EAR]]
-
-    for wr in (lm[L_WR], lm[R_WR]):
-        if wr.visibility < VIS_MIN:
-            continue
-        above_nose = wr.y < nose.y - th["hand_raised_above_nose"] * sh_w
-        if above_nose:
-            active.add("hand_raised")
-        d_ear = min(dist(wr, e) for e in ears)
-        if dist(wr, nose) < th["hand_to_face_dist"] * sh_w:
-            active.add("hand_to_face")
-        elif d_ear < th["hand_to_ear_dist"] * sh_w and not above_nose:
-            active.add("hand_to_ear")
-
-    dyaw = m["yaw"] - b["yaw"]
-    if dyaw > th["yaw_shift"]:
-        active.add("look_right")
-    elif dyaw < -th["yaw_shift"]:
-        active.add("look_left")
-    if m["neck"] < b["neck"] * th["neck_ratio"]:
-        active.add("look_down")
-    if abs(m["tilt"] - b["tilt"]) > th["tilt_deg"]:
-        active.add("leaning")
-    return active
-
-
-def near_neutral(m, base, th=THRESHOLDS, gate=BASELINE_GATE):
-    """True if posture is well inside every limit (safe to adapt baseline)."""
-    return (abs(m["yaw"] - base["yaw"]) < gate * th["yaw_shift"]
-            and m["neck"] > base["neck"] * (1 - gate * (1 - th["neck_ratio"]))
-            and abs(m["tilt"] - base["tilt"]) < gate * th["tilt_deg"])
 
 
 def main():

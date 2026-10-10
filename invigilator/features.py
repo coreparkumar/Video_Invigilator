@@ -29,7 +29,9 @@ def measures(lm: list[SimpleNamespace]) -> dict[str, float]:
 
     return {
         "sh_w": sh_w,
-        # >0: nose shifted toward image-right of ear midpoint (after mirror flip)
+        # >0: nose shifted toward screen-right of ear midpoint (after mirror flip).
+        # On mirrored frame: screen-right = user's right = higher x.
+        # dyaw = yaw - base_yaw. dyaw > 0 -> look_right, dyaw < 0 -> look_left.
         "yaw": (lm[NOSE].x - ear_mid_x) / ear_w,
         # neck-length proxy: nose-to-shoulder-line vertical gap in shoulder widths
         "neck": (mid_sh_y - lm[NOSE].y) / sh_w,

@@ -5,6 +5,7 @@ Pure logic - time passed in as `now`, no I/O, no camera, no file access.
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional, List
+import csv
 import cv2
 import os
 from datetime import datetime
@@ -15,6 +16,7 @@ from invigilator.config import (
     COOLDOWN_S,
     ABSENT_GRACE_S,
     VIS_MIN,
+    VIS_MIN_PARTIAL,
     NOSE, L_SH, R_SH,
 )
 from invigilator.classifier import classify
@@ -39,6 +41,7 @@ class InvigilatorSession:
     - After flagging, the same gesture cannot flag again within COOLDOWN_S
     - Landmarks None for > ABSENT_GRACE_S makes out_of_frame active (hold 3.0s)
     - Low-visibility head/shoulders treated as "no reliable pose" (no classify)
+    - Frame state: IN (all key landmarks visible), PARTIAL (pose found but some key landmarks below VIS_MIN_PARTIAL), OUT (no pose for > ABSENT_GRACE_S)
     """
 
     def __init__(self, out_dir: str = "evidence", enable_snapshots: bool = True):
@@ -51,6 +54,7 @@ class InvigilatorSession:
         self._absent_since: Optional[float] = None
         self._last_t: Optional[float] = None
         self._enable_snapshots = enable_snapshots
+        self._frame_state: str = "OUT"  # IN, PARTIAL, OUT
 
     @property
     def base(self) -> Optional[dict[str, float]]:
@@ -91,17 +95,30 @@ class InvigilatorSession:
         active: set[str] = set()
 
         if lm is not None:
-            # Check if key landmarks are visible enough
-            if min(lm[i].visibility for i in (NOSE, L_SH, R_SH)) > VIS_MIN:
+            # Check visibility of key landmarks (NOSE, L_SH, R_SH)
+            key_vis = [lm[i].visibility for i in (NOSE, L_SH, R_SH)]
+            min_vis = min(key_vis)
+
+            if min_vis > VIS_MIN:
+                # All key landmarks clearly visible -> IN
+                self._frame_state = "IN"
                 active = classify(lm, self.baseline.base)
                 # Adaptive baseline: only when no gesture active AND near neutral
                 if self.baseline.base is not None and not active:
                     m = measures(lm)
                     self.baseline.adapt(m, dt)
-            # Person visible but key landmarks not reliable -> no classify, no adapt
+            elif min_vis > VIS_MIN_PARTIAL:
+                # Pose found but some key landmarks have low visibility -> PARTIAL
+                self._frame_state = "PARTIAL"
+                # No classification, no baseline adaptation
+            else:
+                # Key landmarks too unreliable -> treat as no reliable pose
+                self._frame_state = "PARTIAL"
+            # Person visible (at least some landmarks)
             self._absent_since = None
         else:
             # No person detected
+            self._frame_state = "OUT"
             self._absent_since = self._absent_since or now
             if now - self._absent_since > ABSENT_GRACE_S:
                 active.add("out_of_frame")
@@ -170,6 +187,7 @@ class InvigilatorSession:
             "since": dict(self.since),
             "banners": list(self.banners),
             "calibrated": self.baseline.is_calibrated,
+            "frame_state": self._frame_state,
         }
 
     def close(self) -> None:
