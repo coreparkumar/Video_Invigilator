@@ -28,8 +28,8 @@ from invigilator.config import (
 )
 from invigilator.session import InvigilatorSession
 from invigilator.evidence import EvidenceLog
-from invigilator.overlay import render_overlay
-from invigilator.camera import open_source
+from invigilator.overlay import render as render_overlay
+from invigilator.camera import open_camera
 from invigilator.pose import PoseEstimator
 
 # Audio imports
@@ -149,9 +149,8 @@ def main():
             now = time.time()
 
             # Process video pose
-            res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            lm = res.pose_landmarks.landmark if res.pose_landmarks else None
-            if res.pose_landmarks and show_skel:
+            lm, res = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if res and res.pose_landmarks and show_skel:
                 drawer.draw_landmarks(
                     frame, res.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS,
                     landmark_drawing_spec=styles.get_default_pose_landmarks_style())
@@ -184,8 +183,8 @@ def main():
 
             frame = render_overlay(frame, session_view, fps, now)
 
-            # Audio meter overlay
-            if audio_engine and show_audio_meter and not audio_engine.calibrating:
+            # Audio meter overlay (always show if audio engine exists and show_audio_meter is True)
+            if audio_engine and show_audio_meter:
                 h, w = frame.shape[:2]
                 floor_db = audio_engine._pipeline.floor.mean_db
                 thresh_db = audio_engine._pipeline.floor.threshold_db
@@ -210,33 +209,33 @@ def main():
                     level_y = max(meter_y, min(meter_y + meter_h, level_y))
                     cv2.line(frame, (meter_x, level_y), (meter_x + 30, level_y), (0, 255, 0), 2)
 
-# Calibration status message
-            if audio_engine.calibrating:
-                cv2.putText(frame, "CALIBRATING...", (meter_x - 60, meter_y - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 255), 1)
-            elif audio_engine.calibration_status.value != "ok":
-                # Show calibration error message
-                msg = audio_engine.calibration_message
-                # Wrap long messages
-                lines = []
-                words = msg.split()
-                line = ""
-                for w in words:
-                    if len(line + w) > 35:
+                # Calibration status message
+                if audio_engine.calibrating:
+                    cv2.putText(frame, "CALIBRATING...", (meter_x - 60, meter_y - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 255), 1)
+                elif audio_engine.calibration_status.value != "ok":
+                    # Show calibration error message
+                    msg = audio_engine.calibration_message
+                    # Wrap long messages
+                    lines = []
+                    words = msg.split()
+                    line = ""
+                    for w in words:
+                        if len(line + w) > 35:
+                            lines.append(line)
+                            line = w + " "
+                        else:
+                            line += w + " "
+                    if line:
                         lines.append(line)
-                        line = w + " "
-                    else:
-                        line += w + " "
-                if line:
-                    lines.append(line)
-                for i, line in enumerate(lines):
-                    cv2.putText(frame, line, (meter_x - 60, meter_y - 10 - i * 18),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                    for i, line in enumerate(lines):
+                        cv2.putText(frame, line, (meter_x - 60, meter_y - 10 - i * 18),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
-            # Clipping indicator
-            if audio_engine.clipping:
-                cv2.putText(frame, "CLIPPING!", (meter_x - 60, meter_y + meter_h + 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                # Clipping indicator
+                if audio_engine.clipping:
+                    cv2.putText(frame, "CLIPPING!", (meter_x - 60, meter_y + meter_h + 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
             cv2.imshow("Edge Invigilator POC (Video + Audio)", frame)
 

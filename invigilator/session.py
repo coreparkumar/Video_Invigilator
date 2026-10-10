@@ -137,13 +137,7 @@ class InvigilatorSession:
         """Record a flagged event to evidence log."""
         if not self._enable_snapshots or not self.evidence:
             return
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        snap = os.path.join(self.evidence.out_dir, f"{ts}_{gesture}.jpg")
-        cv2.imwrite(snap, frame)
-        self.evidence.record(
-            datetime.now().isoformat(timespec="seconds"),
-            gesture, label, f"{held:.1f}", snap
-        )
+        self.evidence.record(gesture, label, held, frame)
 
     def _record_audio_alert(self, alert, frame: object) -> None:
         """Record an audio alert to evidence log."""

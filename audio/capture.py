@@ -115,6 +115,10 @@ class MicSource(AudioSource):
             self._stream.close()
             self._stream = None
 
+    def release(self) -> None:
+        """Alias for close() for compatibility with engine."""
+        self.close()
+
 
 class FakeAudioSource(AudioSource):
     """Fake source for tests: yields fixed chunks from a sample array."""
