@@ -45,6 +45,75 @@ python tools/audio_meter.py --device 0
 python tools/audio_eval_sweep.py manifest.csv
 ```
 
+## Dashboard (New)
+
+### Dashboard Mode (Default)
+```bash
+# Launch the new graphical dashboard (default mode)
+python gesture_poc_av.py --dashboard
+
+# Or use the helper script
+scripts\dashboard.bat --live
+```
+
+### Classic Overlay Mode
+```bash
+# Use the classic text overlay (original interface)
+python gesture_poc_av.py --classic
+
+# Or use the helper script
+scripts\dashboard.bat --classic
+```
+
+### Dashboard Features
+- **Left Panel (fixed width)**: Video Detector + Audio Detector sections + Download Findings button
+- **Right Panel (live camera)**: Letterboxed video feed with skeleton overlay, face direction arrow, status chips
+- **Video Detector Section**: Frame state (IN/PARTIAL/OUT), Face direction (LEFT/RIGHT/UP/DOWN/CENTER), Body movement (STILL/LOW/HIGH) with lean angle, Hand state (RAISED/AT EAR/AT FACE/NONE) with movement level, Active gestures with hold-time progress bars (amber→red), Flag count
+- **Audio Detector Section**: Current label (SILENCE/SPEECH/WHISPER/NOISE/BURST) with confidence, Vertical level meter (dB above floor with threshold tick), Calibration status/message, CLIPPING tag, MUTED state, Last audio event, Last fused alert with risk, Audio event count
+- **Download Findings**: Saves `.md` and `.csv` reports to evidence folder (key `d` or button click)
+
+### Dashboard Keys
+| Key | Action |
+|-----|--------|
+| `c` | Calibrate video posture (sit normally, face screen) |
+| `n` | Recalibrate audio noise floor (stay quiet first!) |
+| `m` | Mute/unmute audio |
+| `s` | Toggle skeleton overlay |
+| `t` | Toggle transcript box (if `--transcribe` enabled) |
+| `d` | Download findings (`.md` + `.csv`) |
+| `q` | Quit |
+
+### Optional Local Speech-to-Text (Transcription)
+```bash
+# Enable local offline transcription (requires Vosk model)
+python gesture_poc_av.py --dashboard --transcribe --model <path-to-vosk-model>
+
+# Also log transcript to CSV (requires consent.txt)
+python gesture_poc_av.py --dashboard --transcribe --model <path> --log-transcript
+```
+
+**Transcription Conditions (Privacy-Gated):**
+- **Local & Offline**: Uses Vosk (no network, no cloud)
+- **Opt-in Only**: `--transcribe` + `--model <path>` (model downloaded manually)
+- **Display Only**: Words never feed risk scores, alerts, or keyword accusations
+- **Memory Only**: Last 8 seconds on screen
+- **Logged Only With Consent**: `--log-transcript` + `consent.txt` file required
+- **Filtered**: Only feeds recognizer when audio label is SPEECH or WHISPER
+- **Visual Indicator**: Red "TRANSCRIPTION ON" badge shown when active
+- **Whisper Warning**: Whispered speech transcribes poorly (shown in UI)
+
+### Downloading a Vosk Model
+1. Go to https://alphacephei.com/vosk/models
+2. Download a model (e.g., `vosk-model-small-en-us-0.15.zip`)
+2. Unzip to a folder (e.g., `C:\models\vosk-model-small-en-us-0.15`)
+3. Pass the folder path to `--model`
+
+### Rendering Dashboard Demo PNGs (No Camera Needed)
+```bash
+python tools/render_dashboard_demo.py
+```
+Outputs PNGs to `demo_output/` for visual review at 1280x720 and 960x540.
+
 ## Understanding the 9 Stages
 
 | # | Stage | Duration | What to Do | Expected Result |
@@ -77,6 +146,8 @@ python tools/audio_eval_sweep.py manifest.csv
 | `n` | Recalibrate audio noise floor (stay quiet first!) |
 | `m` | Mute/unmute audio |
 | `s` | Toggle skeleton overlay |
+| `t` | Toggle transcript box (if `--transcribe` enabled) |
+| `d` | Download findings (`.md` + `.csv`) |
 | `q` | Quit |
 
 ## Output Files
@@ -87,6 +158,8 @@ All artifacts written to `--out` folder (default: `evidence/`):
 |------|-------------|
 | `events.csv` | Video gesture flags (timestamp, gesture, label, held_seconds, snapshot.jpg) |
 | `av_events.csv` | Audio + fused alerts (timestamp, severity, risk, audio_kind, video_cues, reasons, snapshot.jpg) |
+| `findings_<timestamp>.md` | Markdown summary of session (video/audio summary, flag counts, transcript) |
+| `findings_<timestamp>.csv` | Chronological events table |
 | `AV_CHECK_REPORT.md` | Markdown report of all 9 stages with PASS/FAIL/SKIPPED |
 | `AV_CHECK_REPORT.md` | Calibration status, per-stage measurements |
 
@@ -122,7 +195,8 @@ Metrics: Precision, Recall, F1, False Alarms/hour.
 ## Privacy & Ethics
 
 - **No audio recorded** - only metadata (labels, dB, timestamps)
-- **No transcription** - no speech-to-text, no speaker ID
+- **No transcription by default** - optional `--transcribe` with strict privacy gates
+- **No speaker ID** - no speaker identification or voiceprints
 - **No network** - fully offline
 - **Consent required** - see `docs/AUDIO_ETHICS.md` for consent form template
 - **Evidence only** - snapshots + CSV logs; human reviews flags
@@ -146,6 +220,20 @@ Metrics: Precision, Recall, F1, False Alarms/hour.
 | `tools/audio_meter.py` | Live mic level meter |
 | `tools/audio_eval_sweep.py` | Batch evaluation from manifest |
 | `tools/eval_ablation.py` | Video vs Audio vs Fused ablation |
+| `ui/config.py` | Dashboard colors, layout constants, thresholds |
+| `ui/textfit.py` | Text fitting (fit_text, wrap_text, draw_wrapped) |
+| `ui/layout.py` | Layout geometry (compute_layout) |
+| `ui/panels.py` | Panel renderers (video/audio panels, button, camera) |
+| `ui/window.py` | WindowManager (canvas, resize, input, toast) |
+| `ui/findings.py` | FindingsRecorder (session accumulation, export .md/.csv) |
+| `tools/av_check.py` | Live wrapper (camera + mic) |
+| `tools/audio_selftest.py` | Synthetic self-test |
+| `tools/audio_replay.py` | Offline WAV analysis |
+| `tools/audio_meter.py` | Live mic level meter |
+| `tools/audio_eval_sweep.py` | Batch evaluation from manifest |
+| `tools/eval_ablation.py` | Video vs Audio vs Fused ablation |
+| `tools/render_dashboard_demo.py` | Demo PNG renderer |
+| `scripts/dashboard.bat` | Demo & launch script |
 
 ## Next Steps
 
@@ -155,7 +243,9 @@ Metrics: Precision, Recall, F1, False Alarms/hour.
 4. Repeat in different conditions (distance, noise, speakers)
 5. Run batch evaluation: `python tools/audio_eval_sweep.py manifest.csv`
 6. Run ablation: `python tools/eval_ablation.py sessions.csv`
+7. Try the dashboard: `python gesture_poc_av.py --dashboard`
+8. Test transcription: `python gesture_poc_av.py --dashboard --transcribe --model <vosk-model-path>`
 
 ---
 
-*All thresholds in `audio/config.py` are UNTUNED starting points. Calibrate on your own room/mic before claiming accuracy.*
+*All thresholds in `audio/config.py` and `ui/config.py` are UNTUNED starting points. Calibrate on your own room/mic before claiming accuracy.*

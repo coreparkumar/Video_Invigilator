@@ -66,6 +66,8 @@ python gesture_poc_av.py --wav file.wav    # replay from audio file
 - `n` — Recalibrate audio noise floor (stay quiet, press `n`) **[Audio]**
 - `m` — Mute/unmute audio **[Audio]**
 - `s` — Toggle skeleton overlay
+- `t` — Toggle transcript box **[Dashboard + Transcription]**
+- `d` — Download findings (`.md` + `.csv`) **[Dashboard]**
 - `q` — Quit
 
 ---
@@ -179,15 +181,84 @@ Sit and type normally. Reports FPS, flags detected, memory. Writes `evidence/SOA
 
 ---
 
-## Audio Extension: Voice + Video Testing
+## Dashboard (New!)
 
-The `gesture_poc_av.py` adds real-time audio detection (whisper/talking) fused with video cues.
+A graphical monitoring dashboard with separate **Video Detection** and **Audio Detection** panels.
 
-### Quick Audio Test (No Hardware)
+### Launch
 ```bash
-# Synthetic self-test (validates pipeline on synthetic signals)
-python tools/audio_selftest.py
+# Dashboard mode (default)
+python gesture_poc_av.py --dashboard
+
+# Classic overlay (legacy)
+python gesture_poc_av.py --classic
+
+# Helper script
+scripts\dashboard.bat --live
 ```
+
+### Dashboard Layout
+- **Left Panel** (fixed width, ~30%): Video Detector + Audio Detector + Download Findings button
+- **Right Panel**: Live camera feed (letterboxed, aspect-preserved) with skeleton overlay, face direction arrow, status chips
+
+### Video Detector Panel
+- Frame state: IN / PARTIAL / OUT
+- Face direction: LEFT / RIGHT / UP / DOWN / CENTER ("as seen on screen")
+- Body movement: STILL / LOW / HIGH + lean angle
+- Hand state: RAISED / AT EAR / AT FACE / NONE + movement (STILL / MOVING / FAST)
+- Active gestures with hold-time progress bars (amber → red when past hold time)
+- Flags this session count
+
+### Audio Detector Panel
+- Current label: SILENCE / SPEECH / WHISPER / NOISE / BURST with confidence
+- Vertical level meter (dB above noise floor) with threshold tick
+- Calibration status + message (amber when not OK)
+- CLIPPING tag, MUTED state
+- Last audio event + last fused alert with risk
+- Audio events count
+
+### Dashboard Keys
+| Key | Action |
+|-----|--------|
+| `c` | Calibrate video posture |
+| `n` | Recalibrate audio noise floor |
+| `m` | Mute/unmute audio |
+| `s` | Toggle skeleton overlay |
+| `t` | Toggle transcript box (if `--transcribe`) |
+| `d` | Download findings (`.md` + `.csv`) |
+| `q` | Quit |
+
+### Optional Local Speech-to-Text (Transcription)
+```bash
+# Enable local offline transcription (requires Vosk model)
+python gesture_poc_av.py --dashboard --transcribe --model <path-to-vosk-model>
+
+# Also log transcript to CSV (requires consent.txt)
+python gesture_poc_av.py --dashboard --transcribe --model <path> --log-transcript
+```
+**Transcription Conditions (Privacy-Gated):**
+- **Local & Offline**: Uses Vosk (no network, no cloud)
+- **Opt-in Only**: `--transcribe` + `--model <path>` (model downloaded manually)
+- **Display Only**: Words never feed risk scores, alerts, or keyword accusations
+- **Memory Only**: Last 8 seconds on screen
+- **Logged Only With Consent**: `--log-transcript` + `consent.txt` file required
+- **Filtered**: Only feeds recognizer when audio label is SPEECH or WHISPER
+- **Visual Indicator**: Red "TRANSCRIPTION ON" badge shown when active
+- **Whisper Warning**: Whispered speech transcribes poorly (shown in UI)
+
+### Downloading a Vosk Model
+1. Go to https://alphacephei.com/vosk/models
+2. Download a model (e.g., `vosk-model-small-en-us-0.15.zip`)
+3. Unzip to a folder (e.g., `C:\models\vosk-model-small-en-us-0.15`)
+4. Pass the folder path to `--model`
+
+### Rendering Dashboard Demo PNGs (No Camera Needed)
+```bash
+python tools/render_dashboard_demo.py
+```
+Outputs PNGs to `demo_output/` for visual review at 1280x720 and 960x540.
+
+---
 
 ### Live Audio + Video Test (9 Stages)
 ```bash

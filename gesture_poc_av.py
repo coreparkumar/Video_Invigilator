@@ -9,6 +9,7 @@ Keys:  c = calibrate neutral posture (sit normally, look at screen, then press)
        n = recalibrate noise floor (stay quiet, then press)
        m = mute/unmute audio
        s = toggle skeleton overlay
+       t = toggle transcript box
        q = quit
 """
 import argparse
@@ -36,6 +37,18 @@ from audio.engine import AudioEngine
 from audio.camera import open_camera as open_audio_camera
 from audio.config import HOP_S
 
+# New UI imports
+from ui.window import WindowManager, build_panel_state
+from ui.findings import create_findings_recorder
+
+
+def open_source(path):
+    """Open video file source."""
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise SystemExit(f"Could not open video file: {path}")
+    return cap
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -46,7 +59,21 @@ def main():
     ap.add_argument("--out", default="evidence", help="folder for snapshots + log")
     ap.add_argument("--no-snapshots", action="store_true", help="disable snapshot saving")
     ap.add_argument("--no-audio", action="store_true", help="disable audio processing")
+
+    # Dashboard options
+    ap.add_argument("--dashboard", action="store_true", default=True, help="enable new dashboard (default)")
+    ap.add_argument("--classic", action="store_true", help="use classic overlay instead of dashboard")
+    ap.add_argument("--transcribe", action="store_true", help="enable local speech-to-text (requires --model)")
+    ap.add_argument("--model", type=str, default=None, help="path to Vosk model folder")
+    ap.add_argument("--log-transcript", action="store_true", help="log transcript to CSV (requires consent.txt)")
+
     args = ap.parse_args()
+
+    # Validate transcription args
+    if args.transcribe and not args.model:
+        raise SystemExit("--transcribe requires --model <path to Vosk model folder>")
+    if args.log_transcript and not os.path.exists("consent.txt"):
+        print("WARNING: --log-transcript requires consent.txt next to the app. Transcript will not be saved.")
 
     # Open video source
     if args.video_file:
@@ -76,6 +103,29 @@ def main():
     audio_engine = None
     if audio_source:
         audio_engine = AudioEngine(audio_source, enabled=True)
+
+    # Window manager (dashboard)
+    use_dashboard = not args.classic and args.dashboard
+    window_manager = None
+    findings_recorder = None
+    transcript_enabled = args.transcribe
+    show_transcript = False
+
+    if use_dashboard:
+        # Initialize window manager
+        def on_download():
+            if findings_recorder and findings_recorder.can_export():
+                return findings_recorder.export_markdown(args.out)
+            return ""
+
+        window_manager = WindowManager(on_download=on_download)
+
+        # Findings recorder
+        findings_recorder = create_findings_recorder(time.time(), consent_path="consent.txt" if args.log_transcript else None)
+
+        # Transcript state
+        if args.transcribe:
+            print("Transcription enabled (offline, local). Press 't' to toggle transcript box.")
 
     show_audio_meter = True
     fps, fps_t = 0.0, time.time()
@@ -113,73 +163,106 @@ def main():
             fps = 0.9 * fps + 0.1 / max(now - fps_t, 1e-6)
             fps_t = now
 
-            # Render overlay
-            session_view = session.get_view()
-            # Add audio info to session view for overlay
-            if audio_engine:
-                session_view["audio_calibrating"] = audio_engine.calibrating
-                session_view["audio_muted"] = audio_engine.muted
-                session_view["audio_floor_db"] = audio_engine._pipeline.floor.mean_db
-                session_view["audio_threshold_db"] = audio_engine._pipeline.floor.threshold_db
+            if use_dashboard:
+                # Build panel state from session and audio engine
+                session_view = session.get_view()
+                audio_engine_state = None
+                if audio_engine:
+                    audio_engine_state = audio_engine.get_state()
 
-            frame = render_overlay(frame, session_view, fps, now)
+                # Build panel state for dashboard
+                panel_state = build_panel_state(
+                    session_view=session_view,
+                    audio_engine_state=audio_engine_state,
+                    audio_events_count=len(audio_alerts) if audio_alerts else 0,
+                    fused_alerts=audio_alerts,
+                    last_audio_event=None,  # Could be enhanced
+                    flags_count=session.flags_count if hasattr(session, 'flags_count') else 0,
+                )
 
-            # Audio meter overlay (always show if audio engine exists and show_audio_meter is True)
-            if audio_engine and show_audio_meter:
-                h, w = frame.shape[:2]
-                floor_db = audio_engine._pipeline.floor.mean_db
-                thresh_db = audio_engine._pipeline.floor.threshold_db
-                level_db = audio_engine._pipeline.get_state().get("floor_mean_db", -60)
-                # Draw meter on right side
-                meter_x = w - 80
-                meter_y = 50
-                meter_h = 200
-                # Background
-                cv2.rectangle(frame, (meter_x, meter_y), (meter_x + 30, meter_y + meter_h), (0, 0, 0), -1)
-                # Floor line
-                if floor_db is not None:
-                    floor_y = int(meter_y + meter_h * (1 - (floor_db + 60) / 40))
-                    cv2.line(frame, (meter_x, floor_y), (meter_x + 30, floor_y), (100, 100, 100), 1)
-                # Threshold line
-                if thresh_db is not None:
-                    thresh_y = int(meter_y + meter_h * (1 - (thresh_db + 60) / 40))
-                    cv2.line(frame, (meter_x, thresh_y), (meter_x + 30, thresh_y), (0, 255, 255), 1)
-                # Current level
-                if level_db is not None:
-                    level_y = int(meter_y + meter_h * (1 - (level_db + 60) / 40))
-                    level_y = max(meter_y, min(meter_y + meter_h, level_y))
-                    cv2.line(frame, (meter_x, level_y), (meter_x + 30, level_y), (0, 255, 0), 2)
+                # Update findings recorder
+                if findings_recorder:
+                    findings_recorder.update_video(panel_state, now)
+                    findings_recorder.update_audio(panel_state, now)
+                    for alert in audio_alerts:
+                        findings_recorder.update_fused_alert(alert, now)
 
-                # Calibration status message
-                if audio_engine.calibrating:
-                    cv2.putText(frame, "CALIBRATING...", (meter_x - 60, meter_y - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 255), 1)
-                elif audio_engine.calibration_status.value != "ok":
-                    # Show calibration error message
-                    msg = audio_engine.calibration_message
-                    # Wrap long messages
-                    lines = []
-                    words = msg.split()
-                    line = ""
-                    for w in words:
-                        if len(line + w) > 35:
+                # Render dashboard
+                camera_frame = frame if use_dashboard else None
+                canvas = window_manager.render(
+                    panel_state=panel_state,
+                    camera_frame=camera_frame,
+                    landmarks=res.pose_landmarks.landmark if res and res.pose_landmarks else None,
+                    connections=mp.solutions.pose.POSE_CONNECTIONS,
+                    draw_spec=None,
+                    spectrogram_heat=None,  # Could be enhanced with audio pipeline data
+                    now=now,
+                )
+
+                # Show transcript box if enabled
+                if transcript_enabled and show_transcript:
+                    # Transcript box would be rendered in window_manager
+                    pass
+
+                cv2.imshow("Edge Invigilator (Dashboard)", canvas)
+
+            else:
+                # Classic overlay mode
+                session_view = session.get_view()
+                if audio_engine:
+                    session_view["audio_calibrating"] = audio_engine.calibrating
+                    session_view["audio_muted"] = audio_engine.muted
+                    session_view["audio_floor_db"] = audio_engine._pipeline.floor.mean_db
+                    session_view["audio_threshold_db"] = audio_engine._pipeline.floor.threshold_db
+
+                frame = render_overlay(frame, session_view, fps, now)
+
+                # Audio meter overlay
+                if audio_engine and show_audio_meter:
+                    h, w = frame.shape[:2]
+                    floor_db = audio_engine._pipeline.floor.mean_db
+                    thresh_db = audio_engine._pipeline.floor.threshold_db
+                    level_db = audio_engine._pipeline.get_state().get("floor_mean_db", -60)
+                    meter_x = w - 80
+                    meter_y = 50
+                    meter_h = 200
+                    cv2.rectangle(frame, (meter_x, meter_y), (meter_x + 30, meter_y + meter_h), (0, 0, 0), -1)
+                    if floor_db is not None:
+                        floor_y = int(meter_y + meter_h * (1 - (floor_db + 60) / 40))
+                        cv2.line(frame, (meter_x, floor_y), (meter_x + 30, floor_y), (100, 100, 100), 1)
+                    if thresh_db is not None:
+                        thresh_y = int(meter_y + meter_h * (1 - (thresh_db + 60) / 40))
+                        cv2.line(frame, (meter_x, thresh_y), (meter_x + 30, thresh_y), (0, 255, 255), 1)
+                    if level_db is not None:
+                        level_y = int(meter_y + meter_h * (1 - (level_db + 60) / 40))
+                        level_y = max(meter_y, min(meter_y + meter_h, level_y))
+                        cv2.line(frame, (meter_x, level_y), (meter_x + 30, level_y), (0, 255, 0), 2)
+                    if audio_engine.calibrating:
+                        cv2.putText(frame, "CALIBRATING...", (meter_x - 60, meter_y - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 255), 1)
+                    elif audio_engine.calibration_status.value != "ok":
+                        msg = audio_engine.calibration_message
+                        lines = []
+                        words = msg.split()
+                        line = ""
+                        for w in words:
+                            if len(line + w) > 35:
+                                lines.append(line)
+                                line = w + " "
+                            else:
+                                line += w + " "
+                        if line:
                             lines.append(line)
-                            line = w + " "
-                        else:
-                            line += w + " "
-                    if line:
-                        lines.append(line)
-                    for i, line in enumerate(lines):
-                        cv2.putText(frame, line, (meter_x - 60, meter_y - 10 - i * 18),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                        for i, line in enumerate(lines):
+                            cv2.putText(frame, line, (meter_x - 60, meter_y - 10 - i * 18),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                    if audio_engine.clipping:
+                        cv2.putText(frame, "CLIPPING!", (meter_x - 60, meter_y + meter_h + 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-                # Clipping indicator
-                if audio_engine.clipping:
-                    cv2.putText(frame, "CLIPPING!", (meter_x - 60, meter_y + meter_h + 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                cv2.imshow("Edge Invigilator POC (Video + Audio)", frame)
 
-            cv2.imshow("Edge Invigilator POC (Video + Audio)", frame)
-
+            # Handle keys
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
@@ -194,13 +277,24 @@ def main():
             elif key == ord("m") and audio_engine:
                 audio_engine.toggle_mute()
                 print("Audio muted" if audio_engine.muted else "Audio unmuted")
+            elif key == ord("t"):
+                show_transcript = not show_transcript
+                if show_transcript:
+                    print("Transcript box ON")
+                else:
+                    print("Transcript box OFF")
 
     finally:
+        # Cleanup
         video_source.release()
         if audio_source:
             audio_source.close()
         if audio_engine:
             audio_engine.close()
+        if findings_recorder:
+            findings_recorder.finalize(time.time())
+            if findings_recorder.can_export():
+                findings_recorder.export_markdown(args.out)
         pose.close()
         session.close()
         cv2.destroyAllWindows()
