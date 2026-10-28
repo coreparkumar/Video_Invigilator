@@ -346,7 +346,40 @@ def test_get_view_returns_snapshot():
     assert "since" in view
     assert "banners" in view
     assert "calibrated" in view
+    assert "frame_state" in view
     assert isinstance(view["active"], frozenset)
+    assert view["frame_state"] == "IN"
+
+
+def test_get_view_frame_state_partial():
+    """get_view includes frame_state=PARTIAL when key landmarks low visibility."""
+    clock = FakeClock(1000.0)
+    session = Session()
+    session.calibrate(make_landmarks())
+
+    # Low visibility on nose
+    lm_low = make_landmarks_with_vis({0: 0.3})
+
+    clock.advance(1.0)
+    session.update(lm_low, clock.now)
+
+    view = session.get_view()
+    assert view["frame_state"] == "PARTIAL"
+
+
+def test_get_view_frame_state_out():
+    """get_view includes frame_state=OUT when no landmarks for > ABSENT_GRACE_S."""
+    clock = FakeClock(1000.0)
+    session = Session()
+    session.calibrate(make_landmarks())
+
+    clock.advance(1.0)
+    session.update(None, clock.now)  # person leaves
+    clock.advance(0.6)  # past ABSENT_GRACE_S
+    session.update(None, clock.now)
+
+    view = session.get_view()
+    assert view["frame_state"] == "OUT"
 
 
 def test_flag_event_has_correct_fields():

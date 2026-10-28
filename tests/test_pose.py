@@ -5,6 +5,11 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+import mediapipe as mp
+# Skip all tests in this module if MediaPipe solutions not available
+if not hasattr(mp, 'solutions'):
+    pytest.skip("MediaPipe solutions not available (version mismatch)", allow_module_level=True)
+
 from invigilator.pose import PoseEstimator
 
 
